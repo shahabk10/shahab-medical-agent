@@ -1,7 +1,6 @@
 import streamlit as st
 import os
-import time
-from google import genai
+import google.generativeai as genai
 from fpdf import FPDF
 from gtts import gTTS
 from PIL import Image
@@ -12,7 +11,7 @@ from streamlit_lottie import st_lottie
 import requests
 
 # ---------------------------------------------------------
-# CONFIGURATION & PAGE SETUP
+# 1. CONFIGURATION & PAGE SETUP
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Shahab AI Hospital",
@@ -28,78 +27,62 @@ st.markdown("""
     .stApp {
         background: linear-gradient(to right, #f8f9fa, #e0e7ff);
     }
-    
-    /* Sidebar Styling */
+    /* Sidebar */
     section[data-testid="stSidebar"] {
         background-color: #0f172a;
     }
-    
-    /* Headers */
-    h1, h2, h3 {
-        color: #1e3a8a;
-        font-family: 'Helvetica', sans-serif;
-    }
-    
     /* Chat Bubbles */
     .user-msg {
         background-color: #dbeafe;
-        padding: 10px;
-        border-radius: 10px;
-        margin-bottom: 5px;
+        padding: 12px;
+        border-radius: 15px;
+        margin-bottom: 10px;
         text-align: right;
         color: #1e3a8a;
         font-weight: 500;
+        border: 1px solid #bfdbfe;
     }
     .agent-msg {
         background-color: #ffffff;
-        padding: 10px;
-        border-radius: 10px;
-        margin-bottom: 5px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        padding: 12px;
+        border-radius: 15px;
+        margin-bottom: 10px;
+        box-shadow: 0px 2px 5px rgba(0,0,0,0.05);
         color: #333;
+        border: 1px solid #e5e7eb;
     }
-    
-    /* Buttons */
-    .stButton>button {
-        background-color: #2563eb;
-        color: white;
-        border-radius: 8px;
-        border: none;
-        padding: 10px 20px;
-        transition: 0.3s;
-    }
-    .stButton>button:hover {
-        background-color: #1d4ed8;
-        transform: scale(1.02);
+    /* Headings */
+    h1, h2, h3 {
+        color: #1e40af;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# INITIALIZATION (Secrets & Session State)
+# 2. API SETUP & SESSION STATE
 # ---------------------------------------------------------
 
-# API Key Logic for Streamlit Cloud
-# GitHub par key upload nahi karni, Cloud settings me dalni hai
+# Retrieve API Key from Secrets
 try:
     if "GEMINI_API_KEY" in st.secrets:
-        os.environ['GEMINI_API_KEY'] = st.secrets["GEMINI_API_KEY"]
+        api_key = st.secrets["GEMINI_API_KEY"]
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash') # Using standard model
     else:
-        st.warning("⚠️ API Key not found in Secrets. Please configure it in Streamlit Cloud.")
-except Exception:
-    pass # Handle local errors gracefully
+        st.error("⚠️ API Key Missing! Please add GEMINI_API_KEY in Streamlit Secrets.")
+        st.stop()
+except Exception as e:
+    st.error(f"Configuration Error: {e}")
+    st.stop()
 
-client = genai.Client()
-model_name = 'gemini-2.5-flash'
-
-# Session State
+# Session State Initialization
 if "history" not in st.session_state:
     st.session_state.history = []
 if "vision_analysis" not in st.session_state:
     st.session_state.vision_analysis = "No image uploaded yet."
 
 # ---------------------------------------------------------
-# HELPER FUNCTIONS
+# 3. HELPER FUNCTIONS
 # ---------------------------------------------------------
 
 def load_lottieurl(url: str):
@@ -120,6 +103,7 @@ def check_emergency(text):
 
 def text_to_speech(text):
     try:
+        # Limit text length to avoid timeouts
         short_text = text[:300] 
         tts = gTTS(text=short_text, lang='en', tld='co.uk')
         fp = io.BytesIO()
@@ -128,16 +112,8 @@ def text_to_speech(text):
     except Exception as e:
         return None
 
-def analyze_image(image):
-    try:
-        prompt = "Analyze this medical image. If prescription, list medicines. If symptom, describe condition briefly."
-        response = client.models.generate_content(model=model_name, contents=[prompt, image])
-        return response.text
-    except Exception as e:
-        return f"Error processing image: {str(e)}"
-
 # ---------------------------------------------------------
-# PDF CLASS
+# 4. PDF GENERATION CLASS
 # ---------------------------------------------------------
 class UltimateHealthReport(FPDF):
     def header(self):
@@ -160,196 +136,203 @@ def create_pdf(chat_history, vision_data):
     pdf = UltimateHealthReport()
     pdf.add_page()
     
+    # Use AI to summarize for the PDF
     prompt = f"""
-    Create a medical summary from this chat: {chat_history} 
-    and image analysis: {vision_data}.
-    Format:
-    SECTION 1: PATIENT SUMMARY
-    SECTION 2: SYMPTOMS
-    SECTION 3: AI RECOMMENDATIONS
-    SECTION 4: ROUTINE CHECKLIST
-    """
+    Summarize this medical consultation for a formal report.
+    Chat History: {chat_history}
+    Image Findings: {vision_data}
     
+    Format nicely as:
+    1. Patient Complaint
+    2. Symptoms Analysis
+    3. Recommendations
+    """
     try:
-        summary_response = client.models.generate_content(model=model_name, contents=[prompt])
-        text_content = summary_response.text
+        summary_resp = model.generate_content(prompt)
+        text_content = summary_resp.text
     except:
-        text_content = "Summary generation failed."
+        text_content = "Could not generate summary. Please check internet connection."
 
     pdf.set_font('Arial', '', 11)
+    # Handling Encoding for PDF
     clean_text = text_content.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 7, clean_text)
     
     return pdf.output(dest='S').encode('latin-1')
 
 # ---------------------------------------------------------
-# NAVIGATION & SIDEBAR
+# 5. UI NAVIGATION
 # ---------------------------------------------------------
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3774/3774299.png", width=80)
-    st.title("Navigation")
-    page = st.radio("Go to:", ["🏠 Home", "🤖 AI Doctor", "🗺️ Hospital Locator", "📄 Medical Report"])
+    st.title("Main Menu")
+    page = st.radio("Navigate:", ["🏠 Home", "🤖 AI Doctor", "🗺️ Hospital Locator", "📄 Medical Report"])
     st.markdown("---")
-    st.info("Emergency? Call 1122")
+    st.warning("🚑 In Emergency: Call 1122")
 
 # ---------------------------------------------------------
-# PAGE 1: HOME
+# PAGE: HOME
 # ---------------------------------------------------------
 if page == "🏠 Home":
     col1, col2 = st.columns([1.2, 1])
     
     with col1:
-        st.title("Welcome to Shahab AI Hospital")
-        st.markdown("### Your Intelligent Medical Companion")
-        st.write("Experience the future of healthcare. Our system provides real-time triage, prescription analysis, and hospital navigation.")
-        
-        st.success("✅ **Available Features:**\n- 24/7 AI Doctor Consultation\n- Image-based Diagnosis\n- Live Hospital Locator\n- Instant Medical Reports")
+        st.title("Shahab AI Hospital")
+        st.markdown("### Next-Gen Healthcare System")
+        st.write("Welcome to your personal medical assistant. Using advanced AI, we provide instant triage, symptom analysis, and hospital navigation.")
+        st.info("👈 Select a feature from the sidebar to begin.")
         
     with col2:
         lottie_med = load_lottieurl("https://assets5.lottiefiles.com/packages/lf20_5njp3vgg.json")
         if lottie_med:
             st_lottie(lottie_med, height=350, key="med_anim")
-        else:
-            st.image("https://img.freepik.com/free-vector/doctor-character-background_1270-84.jpg", width=300)
 
 # ---------------------------------------------------------
-# PAGE 2: AI DOCTOR (CHAT)
+# PAGE: AI DOCTOR
 # ---------------------------------------------------------
 elif page == "🤖 AI Doctor":
     st.title("🤖 Dr. AI Consultant")
-    st.markdown("---")
-
-    # Image Uploader
-    with st.expander("📸 Upload Medical Records (X-Ray / Prescription)"):
+    
+    # --- Image Analysis Section ---
+    with st.expander("📸 Upload X-Ray or Prescription", expanded=False):
         uploaded_file = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'])
         if uploaded_file:
             image = Image.open(uploaded_file)
             st.image(image, caption='Uploaded Image', width=200)
             if st.button("Analyze Image"):
-                if "GEMINI_API_KEY" not in os.environ:
-                     st.error("API Key missing. Cannot analyze.")
-                else:
-                    with st.spinner("Dr. AI is analyzing..."):
-                        result = analyze_image(image)
-                        st.session_state.vision_analysis = result
+                with st.spinner("Analyzing clinical data..."):
+                    try:
+                        vision_prompt = "Analyze this medical image. If it's a prescription, list the medicines. If it's a symptom, describe it."
+                        response = model.generate_content([vision_prompt, image])
+                        st.session_state.vision_analysis = response.text
                         st.success("Analysis Complete!")
-                        st.session_state.history.append(f"**[Image Analysis]:** {result}")
+                        st.session_state.history.append(("AI", f"**[Image Analysis]:** {response.text}"))
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
-    # Chat Interface
+    # --- Chat Interface ---
     chat_container = st.container()
-    
     with chat_container:
         for role, text in st.session_state.history:
             if role == "User":
                 st.markdown(f'<div class="user-msg"><b>You:</b> {text}</div>', unsafe_allow_html=True)
-            elif "**[Image Analysis]:**" in text:
-                st.info(text)
             else:
                 st.markdown(f'<div class="agent-msg"><b>Dr. AI:</b> {text}</div>', unsafe_allow_html=True)
 
-    user_input = st.chat_input("Type your symptoms here...")
-
+    # --- Input Area ---
+    user_input = st.chat_input("Describe your symptoms...")
+    
     if user_input:
-        if "GEMINI_API_KEY" not in os.environ:
-            st.error("Please configure the API Key in Streamlit Secrets first.")
+        st.session_state.history.append(("User", user_input))
+        
+        # Emergency Guardrail
+        if check_emergency(user_input):
+            alert_msg = "⚠️ CRITICAL ALERT: Based on your input, this may be a medical emergency. Please call 1122 immediately."
+            st.session_state.history.append(("AI", alert_msg))
+            st.error(alert_msg)
         else:
-            st.session_state.history.append(("User", user_input))
-            
-            if check_emergency(user_input):
-                em_msg = "⚠️ CRITICAL ALERT: Please call 1122 or go to the ER immediately."
-                st.session_state.history.append(("Agent", em_msg))
-                st.error(em_msg)
-            else:
-                try:
-                    context = f"History: {st.session_state.history}. Vision Data: {st.session_state.vision_analysis}. User asked: {user_input}"
-                    response = client.models.generate_content(model=model_name, contents=[context])
-                    reply = response.text
+            try:
+                # Construct Context
+                full_prompt = f"""
+                Act as a professional, empathetic doctor. 
+                Context from previous image analysis: {st.session_state.vision_analysis}
+                Patient says: {user_input}
+                Provide a short, professional medical advice.
+                """
+                response = model.generate_content(full_prompt)
+                ai_reply = response.text
+                
+                st.session_state.history.append(("AI", ai_reply))
+                
+                # Voice Output
+                audio_bytes = text_to_speech(ai_reply)
+                if audio_bytes:
+                    st.audio(audio_bytes, format='audio/mp3')
                     
-                    st.session_state.history.append(("Agent", reply))
-                    
-                    audio_fp = text_to_speech(reply)
-                    if audio_fp:
-                        st.audio(audio_fp, format='audio/mp3')
-                except Exception as e:
-                    st.error(f"Error connecting to AI: {e}")
-
-            st.rerun()
+            except Exception as e:
+                st.error(f"AI Connection Error: {e}")
+        
+        st.rerun()
 
 # ---------------------------------------------------------
-# PAGE 3: HOSPITAL LOCATOR (MAPS)
+# PAGE: HOSPITAL MAP
 # ---------------------------------------------------------
 elif page == "🗺️ Hospital Locator":
-    st.title("🏥 Nearby Hospitals & Availability")
+    st.title("🏥 Find Nearby Hospitals")
     
-    city = st.selectbox("Select Your City", ["Islamabad", "Lahore", "Karachi"])
+    city = st.selectbox("Select City", ["Islamabad", "Lahore", "Karachi"])
     
+    # Coordinates Center
     locations = {
         "Islamabad": [33.6844, 73.0479],
         "Lahore": [31.5204, 74.3587],
         "Karachi": [24.8607, 67.0011]
     }
     
-    # Demo Data for Hospitals
-    hospitals_data = {
+    # Mock Data for Display
+    hospitals = {
         "Islamabad": [
-            {"name": "PIMS Hospital", "lat": 33.7077, "lon": 73.0501, "phone": "051-9261170", "status": "🟢 Open 24/7"},
-            {"name": "Shifa International", "lat": 33.6766, "lon": 73.1068, "phone": "051-8463666", "status": "🟢 Open 24/7"},
-            {"name": "Maroof Int. Hospital", "lat": 33.6938, "lon": 73.0402, "phone": "051-2222920", "status": "🟠 Busy"}
+            {"name": "PIMS Hospital", "lat": 33.7077, "lon": 73.0501, "phone": "051-9261170", "status": "Open 24/7"},
+            {"name": "Shifa International", "lat": 33.6766, "lon": 73.1068, "phone": "051-8463666", "status": "Open 24/7"},
+            {"name": "Kulsum Int. Hospital", "lat": 33.7042, "lon": 73.0645, "phone": "051-2275765", "status": "Busy"}
         ],
         "Lahore": [
-            {"name": "Jinnah Hospital", "lat": 31.4883, "lon": 74.2987, "phone": "042-99231400", "status": "🟢 Open"},
-            {"name": "Doctors Hospital", "lat": 31.4789, "lon": 74.2801, "phone": "042-35302701", "status": "🟢 Open"}
+             {"name": "Jinnah Hospital", "lat": 31.4883, "lon": 74.2987, "phone": "042-99231400", "status": "Open"},
+             {"name": "General Hospital", "lat": 31.4655, "lon": 74.3570, "phone": "042-99268801", "status": "Open"}
         ],
         "Karachi": [
-            {"name": "Aga Khan Hospital", "lat": 24.8926, "lon": 67.0740, "phone": "021-111911911", "status": "🟢 Open"},
-            {"name": "Liaquat National", "lat": 24.8870, "lon": 67.0671, "phone": "021-34412000", "status": "🔴 Emergency Only"}
+             {"name": "Aga Khan Hospital", "lat": 24.8926, "lon": 67.0740, "phone": "021-111911911", "status": "Open"},
+             {"name": "Indus Hospital", "lat": 24.8450, "lon": 67.1642, "phone": "021-35112709", "status": "Busy"}
         ]
     }
 
     m = folium.Map(location=locations[city], zoom_start=13)
     
-    for hosp in hospitals_data[city]:
-        html = f"""
-        <div style="font-family: sans-serif; width:200px">
-            <h5 style="color: #0d47a1; margin-bottom: 5px;">{hosp['name']}</h5>
-            <div style="font-size: 12px;">
-                <b>Status:</b> {hosp['status']}<br>
-                <b>Phone:</b> <a href="tel:{hosp['phone']}">{hosp['phone']}</a><br>
-                <br>
-                <a href="https://www.google.com/maps/search/?api=1&query={hosp['lat']},{hosp['lon']}" target="_blank" 
-                style="background-color: #4CAF50; color: white; padding: 5px 10px; text-decoration: none; border-radius: 4px;">
-                📍 Navigate on Google Maps
-                </a>
-            </div>
+    for h in hospitals[city]:
+        # HTML for Popup
+        popup_html = f"""
+        <div style="font-family: sans-serif; width: 180px;">
+            <h5 style="color:red; margin:0;">{h['name']}</h5>
+            <hr style="margin: 5px 0;">
+            <b>📞:</b> {h['phone']}<br>
+            <b>🟢 Status:</b> {h['status']}<br>
+            <br>
+            <a href="https://www.google.com/maps/dir/?api=1&destination={h['lat']},{h['lon']}" target="_blank"
+            style="background:#2563eb; color:white; text-decoration:none; padding:5px 10px; border-radius:5px; font-size:12px;">
+            Get Directions ➔
+            </a>
         </div>
         """
-        popup = folium.Popup(html, max_width=300)
         folium.Marker(
-            [hosp['lat'], hosp['lon']],
-            popup=popup,
-            tooltip=hosp['name'],
-            icon=folium.Icon(color="red", icon="plus", prefix='fa')
+            [h['lat'], h['lon']],
+            popup=folium.Popup(popup_html, max_width=250),
+            tooltip=h['name'],
+            icon=folium.Icon(color="blue", icon="plus", prefix='fa')
         ).add_to(m)
 
     st_folium(m, width=1200, height=500)
 
 # ---------------------------------------------------------
-# PAGE 4: MEDICAL REPORT
+# PAGE: REPORT
 # ---------------------------------------------------------
 elif page == "📄 Medical Report":
-    st.title("📄 Generate Medical Report")
-    st.write("Download a formal medical summary of your AI consultation.")
+    st.title("📄 Patient Discharge Report")
     
     if len(st.session_state.history) > 0:
+        st.write("Click below to generate a professional PDF summary of your consultation.")
         if st.button("Generate & Download PDF"):
-            with st.spinner("Processing Report..."):
-                pdf_data = create_pdf(str(st.session_state.history), st.session_state.vision_analysis)
-                st.download_button(
-                    label="Download PDF Report 📥",
-                    data=pdf_data,
-                    file_name="Shahab_Medical_Report.pdf",
-                    mime="application/pdf"
-                )
+            with st.spinner("Writing report..."):
+                try:
+                    pdf_bytes = create_pdf(str(st.session_state.history), st.session_state.vision_analysis)
+                    st.download_button(
+                        label="📥 Download Report",
+                        data=pdf_bytes,
+                        file_name="Shahab_Medical_Report.pdf",
+                        mime="application/pdf"
+                    )
+                    st.success("Report Ready!")
+                except Exception as e:
+                    st.error(f"Failed to generate report: {e}")
     else:
-        st.info("Start a chat with the AI Doctor to generate data for the report.")
+        st.info("Please consult with the AI Doctor first to generate data for the report.")
