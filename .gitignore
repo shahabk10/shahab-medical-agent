@@ -1,0 +1,7 @@
+# Ignore secrets and config
+.streamlit/secrets.toml
+.env
+__pycache__/
+*.pyc
+*.pdf
+.DS_Store

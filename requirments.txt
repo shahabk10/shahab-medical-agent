@@ -1,0 +1,9 @@
+streamlit
+google-genai
+fpdf
+gTTS
+Pillow
+folium
+streamlit-folium
+streamlit-lottie
+requests
