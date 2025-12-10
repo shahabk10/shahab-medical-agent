@@ -6,333 +6,311 @@ from gtts import gTTS
 from PIL import Image
 import io
 import folium
+from folium.plugins import LocateControl, MarkerCluster
 from streamlit_folium import st_folium
 from streamlit_lottie import st_lottie
 import requests
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION & PAGE SETUP
+# 1. CONFIGURATION & COLORFUL THEME
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Shahab AI Hospital",
-    page_icon="🏥",
+    page_title="Shahab Smart Health",
+    page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Professional UI
+# --- MODERN COLORFUL CSS ---
 st.markdown("""
 <style>
-    /* Main Background */
+    /* Gradient Background */
     .stApp {
-        background: linear-gradient(to right, #f8f9fa, #e0e7ff);
+        background: linear-gradient(120deg, #a1c4fd 0%, #c2e9fb 100%);
     }
-    /* Sidebar */
+    
+    /* Sidebar Styling */
     section[data-testid="stSidebar"] {
-        background-color: #0f172a;
+        background-color: #002b36;
+        color: white;
     }
+    
+    /* Card/Glassmorphism Effect */
+    .css-1r6slb0, .stMarkdown, .stButton {
+        border-radius: 15px;
+    }
+    
     /* Chat Bubbles */
     .user-msg {
-        background-color: #dbeafe;
-        padding: 12px;
-        border-radius: 15px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 12px 18px;
+        border-radius: 20px 20px 5px 20px;
         margin-bottom: 10px;
         text-align: right;
-        color: #1e3a8a;
         font-weight: 500;
-        border: 1px solid #bfdbfe;
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
     }
     .agent-msg {
-        background-color: #ffffff;
-        padding: 12px;
-        border-radius: 15px;
-        margin-bottom: 10px;
-        box-shadow: 0px 2px 5px rgba(0,0,0,0.05);
+        background: #ffffff;
         color: #333;
-        border: 1px solid #e5e7eb;
+        padding: 12px 18px;
+        border-radius: 20px 20px 20px 5px;
+        margin-bottom: 10px;
+        text-align: left;
+        border-left: 5px solid #00c6ff;
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
     }
-    /* Headings */
+    
+    /* Buttons */
+    .stButton>button {
+        background: linear-gradient(to right, #11998e, #38ef7d); 
+        color: white;
+        border: none;
+        padding: 10px 24px;
+        font-weight: bold;
+        transition: 0.3s;
+    }
+    .stButton>button:hover {
+        transform: scale(1.05);
+        box-shadow: 0px 5px 15px rgba(0,0,0,0.2);
+    }
+    
+    /* Headers */
     h1, h2, h3 {
-        color: #1e40af;
+        color: #2c3e50;
+        font-family: 'Trebuchet MS', sans-serif;
+        text-shadow: 1px 1px 2px #fff;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. API SETUP & SESSION STATE
+# 2. API SETUP
 # ---------------------------------------------------------
-
-# Retrieve API Key from Secrets
 try:
     if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash') # Using standard model
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
     else:
-        st.error("⚠️ API Key Missing! Please add GEMINI_API_KEY in Streamlit Secrets.")
+        st.error("⚠️ API Key Not Found! Please check Streamlit Secrets.")
         st.stop()
 except Exception as e:
-    st.error(f"Configuration Error: {e}")
-    st.stop()
+    st.error(f"Setup Error: {e}")
 
-# Session State Initialization
+# Session States
 if "history" not in st.session_state:
     st.session_state.history = []
 if "vision_analysis" not in st.session_state:
     st.session_state.vision_analysis = "No image uploaded yet."
 
 # ---------------------------------------------------------
-# 3. HELPER FUNCTIONS
+# 3. FUNCTIONS
 # ---------------------------------------------------------
-
 def load_lottieurl(url: str):
     try:
         r = requests.get(url)
-        if r.status_code != 200:
-            return None
-        return r.json()
+        return r.json() if r.status_code == 200 else None
     except:
         return None
-
-def check_emergency(text):
-    keywords = ["heart attack", "chest pain", "can't breathe", "unconscious", "stroke", "suicide", "bleeding", "poison"]
-    for word in keywords:
-        if word in text.lower():
-            return True
-    return False
 
 def text_to_speech(text):
     try:
-        # Limit text length to avoid timeouts
-        short_text = text[:300] 
-        tts = gTTS(text=short_text, lang='en', tld='co.uk')
+        tts = gTTS(text=text[:300], lang='en', tld='co.uk') # UK Accent
         fp = io.BytesIO()
         tts.write_to_fp(fp)
         return fp
-    except Exception as e:
+    except:
         return None
 
 # ---------------------------------------------------------
-# 4. PDF GENERATION CLASS
+# 4. NAVIGATION
 # ---------------------------------------------------------
-class UltimateHealthReport(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 16)
-        self.cell(0, 10, 'SHAHAB MEDICAL HOSPITAL', 0, 1, 'C')
-        self.set_font('Arial', 'I', 10)
-        self.cell(0, 10, 'AI Integrated Medical Center, Islamabad', 0, 1, 'C')
-        self.set_draw_color(0, 50, 150)
-        self.set_line_width(1)
-        self.line(10, 30, 200, 30)
-        self.ln(10)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.set_text_color(100)
-        self.cell(0, 10, 'CONFIDENTIAL | Generated by AI Agent | Not a substitute for a doctor', 0, 0, 'C')
-
-def create_pdf(chat_history, vision_data):
-    pdf = UltimateHealthReport()
-    pdf.add_page()
-    
-    # Use AI to summarize for the PDF
-    prompt = f"""
-    Summarize this medical consultation for a formal report.
-    Chat History: {chat_history}
-    Image Findings: {vision_data}
-    
-    Format nicely as:
-    1. Patient Complaint
-    2. Symptoms Analysis
-    3. Recommendations
-    """
-    try:
-        summary_resp = model.generate_content(prompt)
-        text_content = summary_resp.text
-    except:
-        text_content = "Could not generate summary. Please check internet connection."
-
-    pdf.set_font('Arial', '', 11)
-    # Handling Encoding for PDF
-    clean_text = text_content.encode('latin-1', 'replace').decode('latin-1')
-    pdf.multi_cell(0, 7, clean_text)
-    
-    return pdf.output(dest='S').encode('latin-1')
-
-# ---------------------------------------------------------
-# 5. UI NAVIGATION
-# ---------------------------------------------------------
-
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3774/3774299.png", width=80)
-    st.title("Main Menu")
-    page = st.radio("Navigate:", ["🏠 Home", "🤖 AI Doctor", "🗺️ Hospital Locator", "📄 Medical Report"])
+    st.image("https://cdn-icons-png.flaticon.com/512/3774/3774299.png", width=100)
+    st.markdown("### 🏥 Shahab Medical AI")
     st.markdown("---")
-    st.warning("🚑 In Emergency: Call 1122")
+    page = st.radio("Navigate:", ["🏠 Home Dashboard", "🤖 Smart Doctor", "🗺️ Live Hospital Map", "📄 Download Report"])
+    st.markdown("---")
+    st.info("🚑 **Emergency: Call 1122**")
 
 # ---------------------------------------------------------
-# PAGE: HOME
+# PAGE 1: HOME
 # ---------------------------------------------------------
-if page == "🏠 Home":
-    col1, col2 = st.columns([1.2, 1])
+if page == "🏠 Home Dashboard":
+    st.title("🌟 Shahab Smart Health System")
+    st.markdown("#### The Future of AI Healthcare in Pakistan")
     
+    col1, col2 = st.columns(2)
     with col1:
-        st.title("Shahab AI Hospital")
-        st.markdown("### Next-Gen Healthcare System")
-        st.write("Welcome to your personal medical assistant. Using advanced AI, we provide instant triage, symptom analysis, and hospital navigation.")
-        st.info("👈 Select a feature from the sidebar to begin.")
-        
-    with col2:
-        lottie_med = load_lottieurl("https://assets5.lottiefiles.com/packages/lf20_5njp3vgg.json")
-        if lottie_med:
-            st_lottie(lottie_med, height=350, key="med_anim")
-
-# ---------------------------------------------------------
-# PAGE: AI DOCTOR
-# ---------------------------------------------------------
-elif page == "🤖 AI Doctor":
-    st.title("🤖 Dr. AI Consultant")
+        st.write("")
+        st.write("Welcome to the most advanced AI medical assistant. We combine **Google Gemini AI** with **Real-time Mapping** to ensure you get the best care.")
+        st.success("✨ **New Feature:** Live Location Tracking Added!")
+        st.info("✨ **New Feature:** Small Clinics & Dispensaries Added!")
     
-    # --- Image Analysis Section ---
-    with st.expander("📸 Upload X-Ray or Prescription", expanded=False):
-        uploaded_file = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'])
-        if uploaded_file:
-            image = Image.open(uploaded_file)
-            st.image(image, caption='Uploaded Image', width=200)
-            if st.button("Analyze Image"):
-                with st.spinner("Analyzing clinical data..."):
-                    try:
-                        vision_prompt = "Analyze this medical image. If it's a prescription, list the medicines. If it's a symptom, describe it."
-                        response = model.generate_content([vision_prompt, image])
-                        st.session_state.vision_analysis = response.text
-                        st.success("Analysis Complete!")
-                        st.session_state.history.append(("AI", f"**[Image Analysis]:** {response.text}"))
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+    with col2:
+        lottie_med = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_cal1600b.json")
+        if lottie_med:
+            st_lottie(lottie_med, height=300)
 
-    # --- Chat Interface ---
-    chat_container = st.container()
-    with chat_container:
-        for role, text in st.session_state.history:
-            if role == "User":
-                st.markdown(f'<div class="user-msg"><b>You:</b> {text}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="agent-msg"><b>Dr. AI:</b> {text}</div>', unsafe_allow_html=True)
+# ---------------------------------------------------------
+# PAGE 2: SMART DOCTOR (FIXED)
+# ---------------------------------------------------------
+elif page == "🤖 Smart Doctor":
+    st.title("🤖 Dr. AI Consultant")
+    st.caption("Discuss your symptoms or upload a prescription.")
 
-    # --- Input Area ---
-    user_input = st.chat_input("Describe your symptoms...")
+    # Image Upload
+    with st.expander("📸 Upload Medical Record / X-Ray"):
+        uploaded_file = st.file_uploader("Choose Image", type=['png', 'jpg', 'jpeg'])
+        if uploaded_file and st.button("Analyze Image"):
+            with st.spinner("Dr. AI is reading the image..."):
+                image = Image.open(uploaded_file)
+                st.image(image, width=200)
+                try:
+                    response = model.generate_content(["Describe this medical image and list any medicines.", image])
+                    st.session_state.vision_analysis = response.text
+                    st.session_state.history.append(("AI", f"**Image Analysis:** {response.text}"))
+                    st.success("Image Analyzed!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    # Chat History
+    for role, text in st.session_state.history:
+        if role == "User":
+            st.markdown(f'<div class="user-msg">👤 {text}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="agent-msg">🩺 {text}</div>', unsafe_allow_html=True)
+
+    # Chat Input
+    user_input = st.chat_input("Type your problem here...")
     
     if user_input:
+        # Display User Message Immediately
         st.session_state.history.append(("User", user_input))
-        
-        # Emergency Guardrail
-        if check_emergency(user_input):
-            alert_msg = "⚠️ CRITICAL ALERT: Based on your input, this may be a medical emergency. Please call 1122 immediately."
-            st.session_state.history.append(("AI", alert_msg))
-            st.error(alert_msg)
-        else:
+        st.markdown(f'<div class="user-msg">👤 {user_input}</div>', unsafe_allow_html=True)
+
+        # Generate AI Response
+        with st.spinner("Dr. AI is thinking..."):
             try:
-                # Construct Context
-                full_prompt = f"""
-                Act as a professional, empathetic doctor. 
-                Context from previous image analysis: {st.session_state.vision_analysis}
-                Patient says: {user_input}
-                Provide a short, professional medical advice.
-                """
-                response = model.generate_content(full_prompt)
-                ai_reply = response.text
+                context = f"History: {st.session_state.history[-5:]}. Vision Data: {st.session_state.vision_analysis}. User: {user_input}"
+                response = model.generate_content(context)
+                reply = response.text
                 
-                st.session_state.history.append(("AI", ai_reply))
+                st.session_state.history.append(("AI", reply))
+                st.markdown(f'<div class="agent-msg">🩺 {reply}</div>', unsafe_allow_html=True)
                 
-                # Voice Output
-                audio_bytes = text_to_speech(ai_reply)
-                if audio_bytes:
-                    st.audio(audio_bytes, format='audio/mp3')
+                # Audio
+                audio = text_to_speech(reply)
+                if audio:
+                    st.audio(audio, format='audio/mp3')
                     
             except Exception as e:
-                st.error(f"AI Connection Error: {e}")
-        
-        st.rerun()
+                st.error(f"Connection Error: {e}")
 
 # ---------------------------------------------------------
-# PAGE: HOSPITAL MAP
+# PAGE 3: LIVE MAP (CLINICS + LOCATION)
 # ---------------------------------------------------------
-elif page == "🗺️ Hospital Locator":
-    st.title("🏥 Find Nearby Hospitals")
-    
+elif page == "🗺️ Live Hospital Map":
+    st.title("🏥 Hospitals & Clinics Finder")
+    st.write("Click the **📍 button** on the map (top-left) to see your **Live Location**.")
+
     city = st.selectbox("Select City", ["Islamabad", "Lahore", "Karachi"])
-    
-    # Coordinates Center
+
     locations = {
         "Islamabad": [33.6844, 73.0479],
         "Lahore": [31.5204, 74.3587],
         "Karachi": [24.8607, 67.0011]
     }
-    
-    # Mock Data for Display
-    hospitals = {
+
+    # Enhanced Data with Clinics
+    medical_centers = {
         "Islamabad": [
-            {"name": "PIMS Hospital", "lat": 33.7077, "lon": 73.0501, "phone": "051-9261170", "status": "Open 24/7"},
-            {"name": "Shifa International", "lat": 33.6766, "lon": 73.1068, "phone": "051-8463666", "status": "Open 24/7"},
-            {"name": "Kulsum Int. Hospital", "lat": 33.7042, "lon": 73.0645, "phone": "051-2275765", "status": "Busy"}
+            {"name": "PIMS Hospital (Govt)", "lat": 33.7077, "lon": 73.0501, "type": "Hospital", "color": "red"},
+            {"name": "Shifa International", "lat": 33.6766, "lon": 73.1068, "type": "Hospital", "color": "red"},
+            {"name": "Ali Medical Clinic", "lat": 33.6930, "lon": 73.0550, "type": "Clinic", "color": "green"},
+            {"name": "Blue Area Dispensary", "lat": 33.7100, "lon": 73.0600, "type": "Clinic", "color": "green"},
+            {"name": "G-9 Family Clinic", "lat": 33.6850, "lon": 73.0250, "type": "Clinic", "color": "green"}
         ],
         "Lahore": [
-             {"name": "Jinnah Hospital", "lat": 31.4883, "lon": 74.2987, "phone": "042-99231400", "status": "Open"},
-             {"name": "General Hospital", "lat": 31.4655, "lon": 74.3570, "phone": "042-99268801", "status": "Open"}
+            {"name": "Jinnah Hospital", "lat": 31.4883, "lon": 74.2987, "type": "Hospital", "color": "red"},
+            {"name": "Doctors Hospital", "lat": 31.4789, "lon": 74.2801, "type": "Hospital", "color": "red"},
+            {"name": "Shaukat Khanum Clinic", "lat": 31.4500, "lon": 74.3000, "type": "Clinic", "color": "green"},
+            {"name": "Model Town Clinic", "lat": 31.4900, "lon": 74.3200, "type": "Clinic", "color": "green"}
         ],
         "Karachi": [
-             {"name": "Aga Khan Hospital", "lat": 24.8926, "lon": 67.0740, "phone": "021-111911911", "status": "Open"},
-             {"name": "Indus Hospital", "lat": 24.8450, "lon": 67.1642, "phone": "021-35112709", "status": "Busy"}
+            {"name": "Aga Khan Hospital", "lat": 24.8926, "lon": 67.0740, "type": "Hospital", "color": "red"},
+            {"name": "Liaquat National", "lat": 24.8870, "lon": 67.0671, "type": "Hospital", "color": "red"},
+            {"name": "Clifton Medical Clinic", "lat": 24.8200, "lon": 67.0300, "type": "Clinic", "color": "green"},
+            {"name": "Gulshan e Iqbal Dispensary", "lat": 24.9000, "lon": 67.0900, "type": "Clinic", "color": "green"}
         ]
     }
 
-    m = folium.Map(location=locations[city], zoom_start=13)
+    # Initialize Map
+    m = folium.Map(location=locations[city], zoom_start=12)
     
-    for h in hospitals[city]:
-        # HTML for Popup
-        popup_html = f"""
-        <div style="font-family: sans-serif; width: 180px;">
-            <h5 style="color:red; margin:0;">{h['name']}</h5>
-            <hr style="margin: 5px 0;">
-            <b>📞:</b> {h['phone']}<br>
-            <b>🟢 Status:</b> {h['status']}<br>
-            <br>
-            <a href="https://www.google.com/maps/dir/?api=1&destination={h['lat']},{h['lon']}" target="_blank"
-            style="background:#2563eb; color:white; text-decoration:none; padding:5px 10px; border-radius:5px; font-size:12px;">
-            Get Directions ➔
+    # 1. Add Live Location Button
+    LocateControl(auto_start=False, strings={"title": "Show my location"}).add_to(m)
+
+    # 2. Add Markers (Cluster for cleaner look)
+    marker_cluster = MarkerCluster().add_to(m)
+
+    for center in medical_centers[city]:
+        icon_type = "user-md" if center['type'] == "Clinic" else "hospital-o"
+        
+        html = f"""
+        <div style="font-family:sans-serif; width:150px">
+            <h5 style="color:{center['color']}">{center['name']}</h5>
+            <span style="background:{center['color']}; color:white; padding:2px 6px; border-radius:4px; font-size:10px;">
+                {center['type']}
+            </span>
+            <br><br>
+            <a href="https://www.google.com/maps/dir/?api=1&destination={center['lat']},{center['lon']}" target="_blank">
+            🚗 Navigate Here
             </a>
         </div>
         """
+        
         folium.Marker(
-            [h['lat'], h['lon']],
-            popup=folium.Popup(popup_html, max_width=250),
-            tooltip=h['name'],
-            icon=folium.Icon(color="blue", icon="plus", prefix='fa')
-        ).add_to(m)
+            [center['lat'], center['lon']],
+            popup=html,
+            tooltip=center['name'],
+            icon=folium.Icon(color=center['color'], icon=icon_type, prefix='fa')
+        ).add_to(marker_cluster)
 
     st_folium(m, width=1200, height=500)
+    st.caption("🔴 Red = Major Hospitals | 🟢 Green = Local Clinics")
 
 # ---------------------------------------------------------
-# PAGE: REPORT
+# PAGE 4: REPORT
 # ---------------------------------------------------------
-elif page == "📄 Medical Report":
-    st.title("📄 Patient Discharge Report")
+elif page == "📄 Download Report":
+    st.title("📄 Generate Medical Report")
+    st.markdown("---")
     
-    if len(st.session_state.history) > 0:
-        st.write("Click below to generate a professional PDF summary of your consultation.")
-        if st.button("Generate & Download PDF"):
-            with st.spinner("Writing report..."):
-                try:
-                    pdf_bytes = create_pdf(str(st.session_state.history), st.session_state.vision_analysis)
-                    st.download_button(
-                        label="📥 Download Report",
-                        data=pdf_bytes,
-                        file_name="Shahab_Medical_Report.pdf",
-                        mime="application/pdf"
-                    )
-                    st.success("Report Ready!")
-                except Exception as e:
-                    st.error(f"Failed to generate report: {e}")
+    if st.session_state.history:
+        if st.button("🖨️ Create PDF Report"):
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", size=12)
+            
+            pdf.cell(200, 10, txt="SHAHAB SMART HEALTH - AI REPORT", ln=True, align='C')
+            pdf.ln(10)
+            
+            # Simple text dump for PDF (to avoid complexity)
+            for role, text in st.session_state.history:
+                clean_text = text.encode('latin-1', 'replace').decode('latin-1')
+                pdf.multi_cell(0, 10, f"{role}: {clean_text}")
+                pdf.ln(2)
+            
+            pdf_out = pdf.output(dest='S').encode('latin-1')
+            
+            st.download_button(
+                label="📥 Download PDF",
+                data=pdf_out,
+                file_name="Medical_Report.pdf",
+                mime="application/pdf"
+            )
+            st.success("Report Generated!")
     else:
-        st.info("Please consult with the AI Doctor first to generate data for the report.")
+        st.warning("No consultation history found to print.")
