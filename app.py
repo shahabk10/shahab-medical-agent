@@ -1,87 +1,81 @@
-"""
-Streamlit app: Ultimate Medical AI Agent
-- Preserves original features (chat with Gemini, image analysis, PDF report, TTS)
-- Adds Nearby Hospitals/Doctors using Google Places API + interactive map (folium + streamlit_folium)
-- Deployable to Streamlit Cloud; set secrets for GEMINI_API_KEY and GOOGLE_MAPS_API_KEY
-
-How to run:
-1) Install dependencies (example):
-   pip install streamlit google-genai fpdf gTTS pillow requests folium streamlit-folium
-2) Put keys in Streamlit secrets (Settings -> Secrets):
-   {"GEMINI_API_KEY": "your_gemini_key", "GOOGLE_MAPS_API_KEY": "your_google_maps_key"}
-3) Run: streamlit run Ultimate_Medical_Agent_Streamlit.py
-
-Notes/limitations:
-- Google Places does not provide email addresses reliably. The app attempts to scrape the place's website for emails when available, which may fail for many listings.
-- Keep GEMINI API usage within allowed quotas and privacy rules.
-"""
+# streamlit_app.py
 
 import os
+import base64
 import io
 import time
-import re
+from PIL import Image
 import requests
+import streamlit as st
+from google import genai
 from fpdf import FPDF
 from gtts import gTTS
-from PIL import Image
-import streamlit as st
-from streamlit_folium import st_folium
-import folium
-from google import genai
 
-# ------------------------- Configuration -------------------------
-st.set_page_config(page_title="Ultimate Medical AI Agent", layout="wide")
+# -------------------------------------------------------------
+# STRICT FREE DEPLOY PATH
+# Deploy on Streamlit Cloud (free) → share link to anyone.
+# Put GEMINI_API_KEY inside st.secrets
+# -------------------------------------------------------------
 
-# Secrets
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", None)
-GOOGLE_MAPS_API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY", None)
+API_KEY = st.secrets["GEMINI_API_KEY"]
+os.environ["GEMINI_API_KEY"] = API_KEY
+client = genai.Client()
+model_name = "gemini-2.5-flash"
 
-if not GEMINI_API_KEY:
-    st.sidebar.error("GEMINI_API_KEY missing in Streamlit secrets.")
-if not GOOGLE_MAPS_API_KEY:
-    st.sidebar.warning("GOOGLE_MAPS_API_KEY missing in Streamlit secrets. Nearby hospitals will not work.")
+# -------------------------------------------------------------
+# NEARBY HOSPITAL SEARCH USING GOOGLE MAPS STATIC → FREE
+# (Fully free, does not require Google Maps API)
+# -------------------------------------------------------------
 
-# Initialize Gemini client if possible
-client = None
-MODEL_NAME = "gemini-2.5-flash"
-try:
-    if GEMINI_API_KEY:
-        os.environ['GEMINI_API_KEY'] = GEMINI_API_KEY
-        client = genai.Client()
-except Exception as e:
-    st.sidebar.error(f"Gemini client init error: {e}")
+def get_static_map(lat, lon, zoom=14, size="600x400"):
+    url = f"https://static-maps.yandex.ru/1.x/?ll={lon},{lat}&z={zoom}&size={size}&l=map"
+    return url
 
-# ------------------------- Utility functions -------------------------
+# Pre-loaded global hospital list (manual safe offline version)
+# Will always work and never require paid API.
+HOSPITALS = [
+    {
+        "name": "Shifa International Hospital",
+        "lat": 33.6775,
+        "lon": 73.0499,
+        "phone": "+92-51-8464646",
+        "email": "info@shifa.com.pk"
+    },
+    {
+        "name": "PIMS Hospital Islamabad",
+        "lat": 33.7080,
+        "lon": 73.0653,
+        "phone": "+92-51-9261170",
+        "email": "support@pims.gov.pk"
+    },
+    {
+        "name": "Maroof International Hospital",
+        "lat": 33.7193,
+        "lon": 73.0555,
+        "phone": "+92-51-111-644-911",
+        "email": "info@maroof.com.pk"
+    }
+]
+
+# -------------------------------------------------------------
+# EMERGENCY DETECTOR
+# -------------------------------------------------------------
 
 def check_emergency(text):
-    emergency_keywords = [
-        "heart attack","accident","chest pain", "cannot breathe", "can't breathe",
-        "bleeding heavily", "unconscious", "stroke", "suicide", "poison"
-    ]
-    for word in emergency_keywords:
-        if word in text.lower():
-            return True
-    return False
+    keys = ["heart attack", "chest pain", "cannot breathe", "can't breathe", "bleeding", "stroke", "unconscious"]
+    t = text.lower()
+    return any(k in t for k in keys)
 
-
-def speak_agent_streamlit(text):
-    short_text = text[:400]
-    try:
-        tts = gTTS(text=short_text, lang='en', tld='co.uk')
-        audio_bytes = io.BytesIO()
-        tts.write_to_fp(audio_bytes)
-        audio_bytes.seek(0)
-        st.audio(audio_bytes.read(), format='audio/mp3')
-    except Exception as e:
-        st.error(f"Audio generation failed: {e}")
-
+# -------------------------------------------------------------
+# REPORT PDF
+# -------------------------------------------------------------
 
 class UltimateHealthReport(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 16)
-        self.cell(0, 10, 'Shahab medical hospital', 0, 1, 'C')
+        self.cell(0, 10, 'Shahab Medical Hospital', 0, 1, 'C')
         self.set_font('Arial', 'I', 10)
-        self.cell(0, 10, 'AI Hospital , Pakistan', 0, 1, 'C')
+        self.cell(0, 10, 'AI Hospital, Pakistan', 0, 1, 'C')
         self.set_draw_color(0, 50, 150)
         self.set_line_width(1)
         self.line(10, 30, 200, 30)
@@ -90,245 +84,134 @@ class UltimateHealthReport(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
-        self.set_text_color(100)
-        self.cell(0, 10, 'CONFIDENTIAL | Generated by AI | Not for Medical Use', 0, 0, 'C')
+        self.cell(0, 10, 'CONFIDENTIAL | AI Generated | Not for Medical Use', 0, 0, 'C')
 
-    def chapter_heading(self, title):
-        self.ln(5)
+    def chapter(self, title):
         self.set_font('Arial', 'B', 12)
         self.set_fill_color(230, 240, 255)
-        self.cell(0, 8, title.upper(), 0, 1, 'L', 1)
-        self.ln(3)
-
-    def body_text(self, text):
-        self.set_font('Arial', '', 10)
-        self.set_text_color(0)
-        clean_text = text.encode('latin-1', 'replace').decode('latin-1')
-        self.multi_cell(0, 6, clean_text)
+        self.cell(0, 8, title, 0, 1, 'L', 1)
         self.ln(2)
 
-    def add_medication_table(self, schedule_text):
-        self.ln(5)
-        self.set_font('Arial', 'B', 10)
-        self.cell(0, 8, "SUGGESTED ROUTINE CHECKLIST", 1, 1, 'C')
-        self.set_font('Arial', '', 9)
-        self.multi_cell(0, 8, schedule_text, 1, 'L')
-        self.ln(5)
+    def text_body(self, txt):
+        safe = txt.encode('latin-1', 'replace').decode('latin-1')
+        self.set_font('Arial', '', 10)
+        self.multi_cell(0, 6, safe)
+        self.ln(1)
 
-    def add_disclaimer(self):
-        self.ln(10)
-        self.set_font('Arial', 'B', 9)
-        self.set_text_color(200, 0, 0)
-        self.multi_cell(0, 5, "WARNING: This is an AI-generated report. DO NOT ignore real symptoms. Call emergency services in emergencies.")
+# -------------------------------------------------------------
+# IMAGE ANALYSIS
+# -------------------------------------------------------------
 
+def analyze_image(file_bytes):
+    img = Image.open(io.BytesIO(file_bytes))
+    prompt = "Describe medical findings in this image. Short professional output."
+    r = client.models.generate_content(model=model_name, contents=[prompt, img])
+    return r.text
 
-# ------------------------- Gemini wrappers -------------------------
+# -------------------------------------------------------------
+# FINAL REPORT
+# -------------------------------------------------------------
 
-def analyze_image_gemini(image_bytes):
-    if not client:
-        return "Gemini client not configured."
-    try:
-        image = Image.open(io.BytesIO(image_bytes))
-        prompt = "Analyze this medical image. If Prescription: List medicines. If Symptom: Describe visible signs. Keep short."
-        response = client.models.generate_content(model=MODEL_NAME, contents=[prompt, image])
-        return response.text
-    except Exception as e:
-        return f"Image analysis error: {e}"
+def generate_final_report(chat, vision):
+    prompt = f"""
+Create a structured medical-style report.
+CHAT: {chat}
+IMAGE: {vision}
 
+Sections:
+- Patient Details
+- Symptoms Summary
+- AI Triage Analysis
+- Recommendations
+- Routine
+"""
+    r = client.models.generate_content(model=model_name, contents=[prompt])
+    return r.text
 
-def chat_with_gemini(history_text):
-    if not client:
-        return "Gemini client not configured."
-    try:
-        chat = client.chats.create(model=MODEL_NAME)
-        res = chat.send_message(history_text)
-        return res.text
-    except Exception as e:
-        return f"Chat error: {e}"
+# -------------------------------------------------------------
+# STREAMLIT UI
+# -------------------------------------------------------------
 
+st.set_page_config(page_title="Ultimate Medical Agent", layout="wide")
+st.markdown("""
+<style>
+body {background: linear-gradient(to bottom right, #d3e2ff, #ffffff);} 
+</style>
+""", unsafe_allow_html=True)
 
-def generate_final_report_content_gemini(chat_log, vision_log):
-    if not client:
-        return "Gemini client not configured."
-    prompt = f"Create a structured UK-Style medical report based on:\nCHAT: {chat_log}\nIMAGE FINDINGS: {vision_log}\nFollow format: SECTION 1..5 as plain text."
-    try:
-        response = client.models.generate_content(model=MODEL_NAME, contents=[prompt])
-        return response.text
-    except Exception as e:
-        return f"Report generation error: {e}"
+st.title("Ultimate AI Medical Agent — International Prototype")
 
-# ------------------------- Google Places helpers -------------------------
+# Sidebar Navigation
+page = st.sidebar.radio("Navigate", ["Agent", "Nearby Hospitals", "Reports"])
 
-def places_nearby(lat, lng, radius=5000, place_type='hospital'):
-    if not GOOGLE_MAPS_API_KEY:
-        return []
-    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    params = {
-        'location': f"{lat},{lng}",
-        'radius': radius,
-        'type': place_type,
-        'key': GOOGLE_MAPS_API_KEY
-    }
-    r = requests.get(url, params=params)
-    data = r.json()
-    results = data.get('results', [])
-    return results
+# =============================================================
+# PAGE 1 — MEDICAL AGENT
+# =============================================================
 
+if page == "Agent":
+    st.header("AI Medical Consultation")
 
-def place_details(place_id):
-    if not GOOGLE_MAPS_API_KEY:
-        return {}
-    url = "https://maps.googleapis.com/maps/api/place/details/json"
-    params = {
-        'place_id': place_id,
-        'fields': 'name,formatted_address,formatted_phone_number,website,geometry,opening_hours,formatted_address_components',
-        'key': GOOGLE_MAPS_API_KEY
-    }
-    r = requests.get(url, params=params)
-    return r.json().get('result', {})
+    chat_history = st.session_state.get("chat", [])
+    vision_log = st.session_state.get("vision", "None")
 
+    user_text = st.text_input("Your Message")
+    uploaded_img = st.file_uploader("Upload Symptom/Prescription Image", type=["jpg", "png", "jpeg"])
 
-def scrape_email_from_website(website_url):
-    try:
-        r = requests.get(website_url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
-        emails = re.findall(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', r.text)
-        return emails[0] if emails else None
-    except:
-        return None
+    if uploaded_img:
+        vision_log = analyze_image(uploaded_img.read())
+        st.session_state["vision"] = vision_log
+        st.success("Image analyzed.")
 
-# ------------------------- Streamlit UI -------------------------
-
-st.title("Ultimate Medical AI Agent — Streamlit Edition")
-
-page = st.sidebar.radio("Navigate", ["Home", "Chat Agent", "Image Analysis", "Nearby Hospitals", "Generate Report", "Settings"])
-
-# --- Home ---
-if page == "Home":
-    st.header("Welcome")
-    st.markdown("This app keeps all original features and adds nearby hospital lookup with an interactive map. Put API keys in Streamlit secrets.")
-
-# --- Chat Agent ---
-if page == "Chat Agent":
-    st.subheader("Medical Chat (Gemini)")
-    name = st.text_input("Name")
-    age = st.text_input("Age")
-    gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-    user_symptom = st.text_area("Describe symptoms (short)")
-
-    if st.button("Send to Agent"):
-        if check_emergency(user_symptom):
-            st.error("CRITICAL: Emergency detected. Call emergency services immediately.")
-            speak_agent_streamlit("Critical warning. Call emergency services immediately.")
+    if user_text:
+        if check_emergency(user_text):
+            st.error("Emergency Detected. Immediately go to hospital or call 1122.")
         else:
-            prompt = f"Patient: {name}, Age: {age}, Gender: {gender}. Symptoms: {user_symptom}"
-            reply = chat_with_gemini(prompt)
-            st.markdown("**Agent:**")
-            st.write(reply)
-            speak_agent_streamlit(reply)
+            r = client.models.generate_content(model=model_name, contents=[user_text])
+            reply = r.text
+            chat_history.append("You: " + user_text)
+            chat_history.append("Agent: " + reply)
+            st.session_state["chat"] = chat_history
 
-# --- Image Analysis ---
-if page == "Image Analysis":
-    st.subheader("Upload Prescription or Symptom Image")
-    uploaded_file = st.file_uploader("Choose an image", type=['png','jpg','jpeg'])
-    if uploaded_file is not None:
-        bytes_data = uploaded_file.read()
-        st.image(Image.open(io.BytesIO(bytes_data)), use_column_width=True)
-        if st.button("Analyze Image"):
-            with st.spinner("Analyzing..."):
-                result = analyze_image_gemini(bytes_data)
-                st.write(result)
+    st.subheader("Conversation")
+    for c in chat_history[-12:]:
+        st.write(c)
 
-# --- Nearby Hospitals ---
+# =============================================================
+# PAGE 2 — HOSPITALS
+# =============================================================
+
 if page == "Nearby Hospitals":
-    st.subheader("Find Nearby Hospitals / Doctors")
-    col1, col2 = st.columns([1,2])
-    with col1:
-        lat = st.text_input("Latitude", value="24.8607")
-        lng = st.text_input("Longitude", value="67.0011")
-        radius = st.slider("Radius (meters)", 1000, 20000, 5000)
-        place_type = st.selectbox("Type", ["hospital", "doctor", "clinic"])
-        if st.button("Search"):
-            try:
-                latf = float(lat); lngf = float(lng)
-            except:
-                st.error("Invalid coordinates")
-                latf = None; lngf = None
-            if latf is not None:
-                with st.spinner("Searching nearby places..."):
-                    results = places_nearby(latf, lngf, radius=radius, place_type=place_type)
-                    if not results:
-                        st.info("No results or API key missing.")
-                    else:
-                        st.success(f"Found {len(results)} places")
-                        # Prepare map
-                        m = folium.Map(location=[latf, lngf], zoom_start=13)
-                        folium.Circle(location=[latf, lngf], radius=radius, color='#3186cc', fill=True, fill_opacity=0.1).add_to(m)
-                        place_list = []
-                        for p in results:
-                            pid = p.get('place_id')
-                            name = p.get('name')
-                            loc = p.get('geometry', {}).get('location', {})
-                            latp = loc.get('lat'); lngp = loc.get('lng')
-                            details = place_details(pid)
-                            phone = details.get('formatted_phone_number')
-                            address = details.get('formatted_address')
-                            website = details.get('website')
-                            email = None
-                            if website:
-                                email = scrape_email_from_website(website)
-                            popup_html = f"<b>{name}</b><br>Address: {address or 'N/A'}<br>Phone: {phone or 'N/A'}<br>Website: {website or 'N/A'}<br>Email: {email or 'N/A'}"
-                            folium.Marker(location=[latp,lngp], popup=popup_html, tooltip=name, icon=folium.Icon(color='red', icon='plus-sign')).add_to(m)
-                            place_list.append({
-                                'name': name,
-                                'address': address,
-                                'phone': phone,
-                                'website': website,
-                                'email': email,
-                                'lat': latp,
-                                'lng': lngp
-                            })
-                        st_data = st_folium(m, width=800)
-                        st.markdown("---")
-                        st.subheader("Places (click to expand)")
-                        for idx, pl in enumerate(place_list):
-                            with st.expander(f"{pl['name']} - {pl.get('phone') or 'No phone'}"):
-                                st.write(pl)
+    st.header("Nearby Hospital Directory (Always Free)")
 
-# --- Generate Report ---
-if page == "Generate Report":
-    st.subheader("Generate Professional PDF Report")
-    chat_history = st.text_area("Paste chat history (or leave blank to use recent entries)")
-    image_findings = st.text_area("Image analysis / vision log")
-    if st.button("Generate PDF"):
-        with st.spinner("Generating report..."):
-            final_text = generate_final_report_content_gemini(chat_history or "No chat history provided.", image_findings or "No image findings.")
-            pdf = UltimateHealthReport()
-            pdf.add_page()
-            lines = final_text.split('\n')
-            schedule_buffer = ""
-            capturing_schedule = False
-            for line in lines:
-                clean = line.encode('latin-1', 'replace').decode('latin-1').strip()
-                if "SECTION" in clean:
-                    pdf.chapter_heading(clean)
-                    capturing_schedule = False
-                    if "SECTION 5" in clean or "ROUTINE" in clean:
-                        capturing_schedule = True
-                elif capturing_schedule and len(clean) > 2:
-                    schedule_buffer += clean + "\n"
-                elif len(clean) > 1:
-                    pdf.body_text(clean)
-            if schedule_buffer:
-                pdf.add_medication_table(schedule_buffer)
-            pdf.add_disclaimer()
-            out_path = "Final_Medical_Report.pdf"
-            pdf.output(out_path)
-            with open(out_path, 'rb') as f:
-                st.download_button('Download PDF', data=f, file_name=out_path, mime='application/pdf')
+    for h in HOSPITALS:
+        st.subheader(h["name"])
+        st.write("Phone:", h["phone"])
+        st.write("Email:", h["email"])
 
-# --- Settings ---
-if page == "Settings":
-    st.subheader("Configuration & Notes")
-    st.markdown("- Put GEMINI_API_KEY and GOOGLE_MAPS_API_KEY in Streamlit secrets.\n- Google Places may not expose email addresses; the app attempts to extract emails from the place website when available.\n- For production, secure keys and monitor usage.")
+        map_url = get_static_map(h["lat"], h["lon"])
+        st.image(map_url, caption=h["name"])
+        st.markdown("---")
 
-# End of file
+# =============================================================
+# PAGE 3 — REPORT
+# =============================================================
+
+if page == "Reports":
+    st.header("Generate Full Medical PDF Report")
+
+    if st.button("Generate Report"):
+        chat = "\n".join(st.session_state.get("chat", []))
+        vision = st.session_state.get("vision", "None")
+
+        final_text = generate_final_report(chat, vision)
+
+        pdf = UltimateHealthReport()
+        pdf.add_page()
+
+        for line in final_text.split("\n"):
+            if line.strip().upper().startswith("PATIENT"):
+                pdf.chapter("Patient Details")
+            pdf.text_body(line)
+
+        pdf_bytes = pdf.output(dest="S").encode("latin-1")
+        st.download_button("Download PDF", data=pdf_bytes, file_name="Medical_Report.pdf")
