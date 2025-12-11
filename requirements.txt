@@ -1,12 +1,9 @@
 streamlit
 google-generativeai
-fpdf
-gTTS
-Pillow
-folium
+gtts
+fpdf2
+pillow
+streamlit-option-menu
 streamlit-folium
-streamlit-lottie
+folium
 requests
-streamlit
-googlemaps
-
