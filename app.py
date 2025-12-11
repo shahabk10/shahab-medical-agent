@@ -1,4 +1,4 @@
-# app.py - Ultimate AI Medical Assistant (International Version)
+# app.py - Ultimate AI Medical Assistant (International Version - FIXED)
 import streamlit as st
 import google.generativeai as genai
 from gtts import gTTS
@@ -16,7 +16,7 @@ import requests
 # ===================== PAGE CONFIG =====================
 st.set_page_config(
     page_title="MediAI Pro - Your 24/7 AI Doctor",
-    page_icon="",
+    page_icon="🩺",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -207,7 +207,7 @@ elif selected == "AI Doctor Chat":
                 reply = response.text
             
             st.session_state.chat_history.append((user_input, reply, "user"))
-            st.session_state.chat_message("assistant").write(reply)
+            st.chat_message("assistant").write(reply)
             speak(reply)
             st.rerun()
 
@@ -216,7 +216,6 @@ elif selected == "Upload Image":
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
     
     if uploaded_file:
-        :
         image = Image.open(uploaded_file)
         st.image(image, caption="Uploaded Image", width=400)
         
@@ -234,10 +233,7 @@ elif selected == "Nearby Hospitals":
     location = st.text_input("Enter your city or area (e.g., Lahore, Karachi, London)", "Lahore")
     
     if st.button("Find Hospitals"):
-        # Using Google Places API via a free proxy (you can replace with your own key later)
-        url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query=hospitals+in+{location}&key=YOUR_GOOGLE_MAPS_KEY"
-        
-        # Free alternative using Overpass API (OpenStreetMap)
+        # Free alternative using Overpass API (OpenStreetMap) - No API key needed!
         overpass_url = "http://overpass-api.de/api/interpreter"
         overpass_query = f"""
         [out:json];
@@ -251,7 +247,11 @@ elif selected == "Nearby Hospitals":
             response = requests.get(overpass_url, params={'data': overpass_query})
             data = response.json()
             
-            m = folium.Map(location=[31.5204, 74.3587], zoom_start=12)
+            if not data['elements']:
+                st.warning("No hospitals found nearby. Try a different location.")
+                st.stop()
+            
+            m = folium.Map(location=[31.5204, 74.3587] if "lahore" in location.lower() else [51.5074, -0.1278], zoom_start=12)
             
             for element in data['elements'][:10]:
                 if 'lat' in element:
@@ -263,21 +263,28 @@ elif selected == "Nearby Hospitals":
                 
                 name = element.get('tags', {}).get('name', 'Hospital')
                 phone = element.get('tags', {}).get('phone', 'Not available')
+                email = element.get('tags', {}).get('email', 'Not available')
+                
                 folium.Marker(
                     [lat, lon],
-                    popup=f"<b>{name}</b><br>Phone: {phone}",
-                    icon=folium.Icon(color="red", icon="plus")
+                    popup=f"<b>{name}</b><br>Phone: {phone}<br>Email: {email}<br>Location: {lat}, {lon}",
+                    icon=folium.Icon(color="red", icon="plus", prefix="fa")
                 ).add_to(m)
             
             st_folium(m, width=700, height=500)
+            st.success(f"Found {len(data['elements'])} hospitals nearby!")
         
-        except:
-            st.error("Map loading failed. Try again later.")
+        except Exception as e:
+            st.error(f"Map loading failed: {str(e)}. Try again later or check internet.")
 
 elif selected == "Download Report":
     st.header("Generate & Download Report")
     
     if st.button("Generate Final Report"):
+        if not st.session_state.patient_info:
+            st.warning("Please start a consultation first in 'AI Doctor Chat'.")
+            st.stop()
+        
         with st.spinner("Creating professional report..."):
             report_text = generate_report()
             pdf_bytes = create_pdf(report_text)
@@ -286,13 +293,13 @@ elif selected == "Download Report":
         
         st.success("Report Generated!")
         st.download_button(
-            label="Download PDF Report",
-            data=pdf_bytes,
-            file_name=f"MediAI_Report_{st.session_state.patient_info.get('name','Patient')}.pdf",
+            label="📥 Download PDF Report",
+            data=st.session_state.final_report,
+            file_name=f"MediAI_Report_{st.session_state.patient_info.get('name', 'Patient')}.pdf",
             mime="application/pdf"
         )
         st.text_area("Report Preview", report_text, height=400)
 
 # Footer
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: white;'>© 2025 MediAI Pro | Made with ❤️ for Pakistan & World</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: white;'>© 2025 MediAI Pro | Made with ❤️ for Pakistan & World | Emergency: Call 1122</p>", unsafe_allow_html=True)
