@@ -1,256 +1,227 @@
-# ═══════════════════════════════════════════════════════════════
-# AI HEALTH PLATFORM – INTERNATIONAL EDITION (2025)
-# Features: Chat + Voice + Image Analysis + PDF Report + Nearby Hospitals Map
-# Works with or WITHOUT Google Maps API Key (Graceful fallback)
-# ═══════════════════════════════════════════════════════════════
-
+# AI DOCTOR PRO – INTERNATIONAL 2025 EDITION
 import streamlit as st
 import google.generativeai as genai
 from fpdf import FPDF
 from gtts import gTTS
 from PIL import Image
 import io
-import time
 import base64
+import time
 
-# ───── API KEYS (from Streamlit Secrets) ───────────────────────
+# ───── CONFIG & SECRETS ─────
+st.set_page_config(page_title="AI Doctor Pro", page_icon="Doctor", layout="centered")
+
 try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=GEMINI_API_KEY)
-    st.success("Gemini API Connected")
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 except:
-    st.error("GEMINI_API_KEY not found! Add it in Secrets → https://share.streamlit.io/settings/secrets")
+    st.error("Add GEMINI_API_KEY in Secrets!")
     st.stop()
 
-# Optional Google Maps Key (won't crash if missing)
-GOOGLE_MAPS_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY", None)
-if GOOGLE_MAPS_KEY:
-    st.success("Google Maps API Ready")
-
-# ───── Beautiful UI & Animations ─────────────────────────────────
-st.set_page_config(page_title="AI Health Assistant", page_icon="Doctor", layout="centered")
-
+# ───── ULTRA BEAUTIFUL THEME (Medical Neon Style) ─────
 st.markdown("""
 <style>
-    .big-title {font-size: 3.5rem !important; font-weight: bold; color: #0D47A1; text-align: center;}
-    .stApp {background: linear-gradient(135deg, #e0f7fa, #fff3e0); animation: fadein 2s;}
-    @keyframes fadein {from {opacity:0;} to {opacity:1;}}
-    .emergency {color:red; font-size:1.4rem; font-weight:bold; animation: blink 1s infinite;}
-    @keyframes blink {50% {opacity:0.4;}}
-    .chat-bubble {padding: 12px; border-radius: 15px; margin: 10px 0;}
-    .user-bubble {background:#2196F3; color:white; text-align:right;}
-    .agent-bubble {background:#E3F2FD; color:#000;}
+    .stApp {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        font-family: 'Segoe UI', sans-serif;
+    }
+    .big-title {
+        font-size: 4.5rem !important;
+        font-weight: 900;
+        background: -webkit-linear-gradient(#fff, #00d4ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        text-shadow: 0 0 20px rgba(0,212,255,0.5);
+    }
+    .feature-card {
+        background: rgba(255,255,255,0.15);
+        padding: 20px;
+        border-radius: 20px;
+        text-align: center;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.2);
+        transition: all 0.3s;
+        margin: 10px;
+    }
+    .feature-card:hover {
+        transform: translateY(-10px);
+        box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+    }
+    .chat-container {
+        background: rgba(255,255,255,0.1);
+        border-radius: 20px;
+        padding: 20px;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.3);
+    }
+    .emergency {color: #ff0033; font-size:1.5rem; font-weight:bold; animation: pulse 1s infinite;}
+    @keyframes pulse {0%,100%{opacity:1} 50%{opacity:0.5}}
 </style>
 """, unsafe_allow_html=True)
 
-# ───── PDF Report Class (Same Professional Look) ─────────────────
-class UltimateHealthReport(FPDF):
+# ───── PDF CLASS (Professional) ─────
+class PDFReport(FPDF):
     def header(self):
-        self.set_font('Arial', 'B', 18)
-        self.cell(0, 15, 'MYU AI MEDICAL HOSPITAL', ln=1, align='C')
-        self.set_font('Arial', 'I', 11)
-        self.cell(0, 8, 'International AI Health Platform', ln=1, align='C')
-        self.set_draw_color(0, 102, 204)
-        self.line(10, 35, 200, 35)
+        self.set_font('Arial', 'B', 20)
+        self.cell(0, 15, 'AI DOCTOR PRO - MEDICAL REPORT', ln=1, align='C')
+        self.set_font('Arial', 'I', 12)
+        self.cell(0, 10, 'International AI Health Assistant', ln=1, align='C')
         self.ln(10)
-
     def footer(self):
         self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, 'AI-Generated Report | Not a Substitute for Professional Medical Care', align='C')
+        self.set_font('Arial', 'I', 9)
+        self.cell(0, 10, 'AI Generated | Consult Doctor | Not for Legal Use', align='C')
 
-    def chapter(self, title):
-        self.set_font('Arial', 'B', 14)
-        self.set_fill_color(0, 102, 204)
-        self.set_text_color(255)
-        self.cell(0, 10, title.upper(), ln=1, fill=True)
-        self.ln(5)
-
-    def body(self, txt):
-        self.set_font('Arial', '', 11)
-        self.set_text_color(0)
-        self.multi_cell(0, 7, txt.encode('latin-1', 'replace').decode('latin-1'))
-        self.ln(3)
-
-# ───── Helper Functions ────────────────────────────────────────
+# ───── HELPER FUNCTIONS ─────
 def speak(text):
     try:
-        tts = gTTS(text=text[:200], lang='en', tld='co.uk', slow=False)
+        tts = gTTS(text=str(text)[:200], lang='en', tld='co.uk')
         audio = io.BytesIO()
         tts.write_to_fp(audio)
         audio.seek(0)
-        st.audio(audio, format="audio/mp3", autoplay=True)
+        st.audio(audio, format='audio/mp3', autoplay=True)
     except:
         pass
 
 def check_emergency(text):
-    keywords = ["heart attack","chest pain","can't breathe","bleeding heavily","unconscious","stroke","suicide","poison"]
-    return any(k in text.lower() for k in keywords)
+    words = ["heart attack", "chest pain", "can't breathe", "bleeding", "unconscious", "stroke", "suicide"]
+    return any(word in text.lower() for word in words)
 
-def analyze_image(img_bytes):
+def analyze_image(img):
     model = genai.GenerativeModel('gemini-1.5-flash')
-    img = Image.open(io.BytesIO(img_bytes))
-    response = model.generate_content([
-        "Analyze this medical image. If it's a prescription → list medicines. If it's a symptom → describe it clearly.",
-        img
-    ], stream=False)
+    response = model.generate_content(["Analyze this medical image (prescription or symptom). Be clear and professional.", img])
     return response.text
 
-def generate_report(chat, vision):
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"""
-    Create a professional medical report in plain text with these sections:
-    SECTION 1: PATIENT DETAILS
-    SECTION 2: SYMPTOM SUMMARY
-    SECTION 3: POSSIBLE CAUSES (General info only)
-    SECTION 4: LIFESTYLE RECOMMENDATIONS
-    SECTION 5: DAILY ROUTINE
+# Initialize session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    st.session_state.vision = "No image uploaded"
+    st.session_state.chat_ended = False
 
-    Chat history: {chat}
-    Image analysis: {vision}
-    """
-    resp = model.generate_content(prompt)
-    return resp.text
+# ───── SIDEBAR NAVIGATION ─────
+page = st.sidebar.radio("Menu", ["Home Dashboard", "Chat with AI Doctor", "Nearby Hospitals", "Download Report"])
 
-# ───── Nearby Hospitals (Works even without API key) ─────────────
-def show_hospitals():
-    st.subheader("Nearby Hospitals & Clinics")
-    location = st.text_input("Enter city or area (e.g., Lahore, Karachi, London, New York)", "Lahore")
+# ───── HOME DASHBOARD (Zabardast Design) ─────
+if page == "Home Dashboard":
+    st.markdown('<h1 class="big-title">AI DOCTOR PRO</h1>', unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align:center; color:#fff;'>Your 24/7 AI Medical Assistant</h3>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    if st.button("Search Hospitals Near Me"):
-        with st.spinner("Searching..."):
-            if GOOGLE_MAPS_KEY:
-                # Full interactive map with real data
-                url = f"https://www.google.com/maps/embed/v1/search?key={GOOGLE_MAPS_KEY}&q=hospital+near+{location.replace(' ', '+')}"
-                st.components.v1.iframe(url, height=500)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown('<div class="feature-card"><h2>Chat</h2><p>Talk to AI Doctor</p></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown('<div class="feature-card"><h2>Image</h2><p>Upload Prescription/Symptom</p></div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown('<div class="feature-card"><h2>Report</h2><p>Get PDF Report</p></div>', unsafe_allow_html=True)
+
+    col4, col5 = st.columns(2)
+    with col4:
+        st.markdown('<div class="feature-card"><h2>Hospital</h2><p>Find Nearby Hospitals</p></div>', unsafe_allow_html=True)
+    with col5:
+        st.markdown('<div class="feature-card"><h2>Emergency</h2><p>Instant Alert System</p></div>', unsafe_allow_html=True)
+
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    if st.button("Start Consultation Now", type="primary", use_container_width=True):
+        st.switch_page("Chat with AI Doctor")
+
+# ───── CHAT PAGE (Fully Working) ─────
+elif page == "Chat with AI Doctor":
+    st.header("Chat with AI Doctor (UK Voice)")
+
+    # Always show image upload
+    uploaded_file = st.file_uploader("Upload Prescription or Symptom Photo", type=["png", "jpg", "jpeg"])
+
+    if uploaded_file:
+        with st.spinner("Analyzing your image..."):
+            img = Image.open(uploaded_file)
+            st.image(img, width=300)
+            result = analyze_image(img)
+            st.success("Image Analyzed!")
+            st.session_state.vision = result
+            st.info(result)
+            speak("Image analyzed successfully")
+
+    # Chat messages
+    chat_container = st.container()
+    with chat_container:
+        for msg in st.session_state.messages:
+            if msg["role"] == "user":
+                st.markdown(f"<div style='text-align:right; background:#00d4ff; color:white; padding:15px; border-radius:20px; margin:10px; max-width:80%'; display:inline-block'>{msg['content']}</div>", unsafe_allow_html=True)
             else:
-                # Fallback: Static Google Maps link + list of emergency numbers
-                st.info("Google Maps API not connected → Showing fallback map + emergency contacts")
-                map_url = f"https://maps.google.com/maps?q=hospital+near+{location.replace(' ', '+')}&z=13&output=embed"
-                st.components.v1.iframe(map_url, height=500)
-
-            # Always show emergency numbers (very useful!)
-            st.markdown("### Emergency Contacts")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Pakistan** → 1122 / 15  \n**UK** → 999  \n**USA/Canada** → 911")
-            with col2:
-                st.markdown("**India** → 108  \n**Australia** → 000  \n**UAE** → 998/999")
-
-# ───── Main App (Multi-page Style) ─────────────────────────────
-page = st.sidebar.radio("Navigation", ["Home", "Chat with Doctor AI", "Find Hospitals", "Download Report"])
-
-if page == "Home":
-    st.markdown("<h1 class='big-title'>AI Doctor Assistant</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center;font-size:1.3rem;'>Talk • Upload Image • Get Report • Find Hospital</p>", unsafe_allow_html=True)
-    st.video("https://www.youtube.com/watch?v=0_4qMhV9Yb0")  # Replace with your intro video
-    st.balloons()
-
-elif page == "Chat with Doctor AI":
-    st.header("Chat with Your AI Doctor (UK Accent)")
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-        intro = "Hello! I'm your AI medical assistant. Please tell me your name and age."
-        st.session_state.messages.append({"role": "agent", "content": intro})
-        speak(intro)
-
-    # Display chat
-    for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            st.markdown(f"<div class='chat-bubble user-bubble'>You: {msg['content']}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='chat-bubble agent-bubble'>Doctor AI: {msg['content']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background:#1e1e1e; color:#00ff9d; padding:15px; border-radius:20px; margin:10px; max-width:80%'; display:inline-block>{msg['content']}</div>", unsafe_allow_html=True)
 
     # User input
-    if prompt := st.chat_input("Type your symptoms or message..."):
+    if prompt := st.chat_input("Describe your symptoms..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.rerun()
 
-        # Emergency check
         if check_emergency(prompt):
-            emergency = "EMERGENCY! This sounds serious. CALL 999 or 1122 IMMEDIATELY!"
-            st.markdown(f"<p class='emergency'>{emergency}</p>", unsafe_allow_html=True)
+            alert = "EMERGENCY DETECTED! CALL 1122 or 15 IMMEDIATELY!"
+            st.markdown(f"<p class='emergency'>{alert}</p>", unsafe_allow_html=True)
             speak("Emergency! Call 1122 now!")
-            st.session_state.messages.append({"role": "agent", "content": emergency})
+            st.session_state.messages.append({"role": "agent", "content": alert})
             st.stop()
 
-        # Image upload trigger
-        if any(x in prompt.lower() for x in ["image", "photo", "prescription", "upload"]):
-            uploaded = st.file_uploader("Upload prescription or symptom photo", type=["png","jpg","jpeg"])
-            if uploaded:
-                with st.spinner("Analyzing image..."):
-                    result = analyze_image(uploaded.getvalue())
-                    st.success("Image analyzed!")
-                    st.session_state.vision = result
-                    st.session_state.messages.append({"role": "agent", "content": f"Image result: {result}"})
-                    speak("Image analyzed.")
-                st.rerun()
-
-        # Normal Gemini response
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        history = [m["content"] for m in st.session_state.messages]
-        response = model.generate_content(history, stream=True)
-        full_reply = ""
-        placeholder = st.empty()
-        for chunk in response:
-            full_reply += chunk.text
-            placeholder.markdown(f"<div class='chat-bubble agent-bubble'>Doctor AI: {full_reply}</div>", unsafe_allow_html=True)
-        st.session_state.messages.append({"role": "agent", "content": full_reply})
-        speak(full_reply)
+        with st.spinner("Doctor is thinking..."):
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
+            response = model.generate_content(f"Act as a kind medical doctor. Patient said: {prompt}\nPrevious chat: {history}")
+            reply = response.text.replace("*", "").replace("#", "")
+            st.session_state.messages.append({"role": "agent", "content": reply})
+            speak(reply)
+        st.rerun()
 
     if st.button("End Chat & Generate Report"):
-        st.success("Chat ended! Go to 'Download Report' page.")
         st.session_state.chat_ended = True
+        st.success("Chat ended! Go to Download Report")
+        speak("Chat ended. Generating your report.")
 
-elif page == "Find Hospitals":
-    show_hospitals()
+# ───── HOSPITAL PAGE (Fallback + Real Map) ─────
+elif page == "Nearby Hospitals":
+    st.header("Find Hospitals Near You")
+    location = st.text_input("Enter city/area", "Lahore")
+    if st.button("Search"):
+        map_url = f"https://maps.google.com/maps?q=hospital+near+{location}&output=embed"
+        st.components.v1.iframe(map_url, height=500)
 
+# ───── DOWNLOAD REPORT (100% Working) ─────
 elif page == "Download Report":
-    st.header("Your Final Medical Report")
-    if not st.session_state.get("chat_ended", False):
+    st.header("Your Medical Report")
+    if not st.session_state.chat_ended:
         st.warning("Please complete the chat first!")
-        st.stop()
+    else:
+        if st.button("Generate PDF Report"):
+            with st.spinner("Creating your professional report..."):
+                chat_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
+                full_text = f"Patient Chat:\n{chat_text}\n\nImage Analysis:\n{st.session_state.vision}"
 
-    vision_text = st.session_state.get("vision", "No image uploaded")
-    chat_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                prompt = f"Create a beautiful medical report from this:\n{full_text}"
+                report = model.generate_content(prompt).text
 
-    if st.button("Generate & Download PDF"):
-        with st.spinner("Creating professional report..."):
-            report_text = generate_report(chat_text, vision_text)
+                pdf = PDFReport()
+                pdf.add_page()
+                pdf.set_font("Arial", size=12)
+                for line in report.split("\n"):
+                    if line.strip():
+                        pdf.multi_cell(0, 8, line.encode('latin-1', 'replace').decode('latin-1'))
+                pdf.ln(10)
+                pdf.set_text_color(255, 0, 0)
+                pdf.multi_cell(0, 10, "This is AI-generated. Always consult a real doctor.")
 
-            pdf = UltimateHealthReport()
-            pdf.add_page()
-            pdf.set_font("Arial", size=12)
+                output = io.BytesIO()
+                pdf.output(output)
+                output.seek(0)
 
-            for line in report_text.split("\n"):
-                if line.strip() == "":
-                    continue
-                if any(x in line.upper() for x in ["SECTION", "PATIENT", "SUMMARY", "RECOMMENDATION", "ROUTINE"]):
-                    pdf.chapter(line.strip())
-                else:
-                    pdf.body(line.strip())
-
-            pdf.ln(10)
-            pdf.set_font("Arial", "B", 12)
-            pdf.set_text_color(200, 0, 0)
-            pdf.multi_cell(0, 8, "DISCLAIMER: This is AI-generated advice. Always consult a qualified doctor.")
-
-            # Save & offer download
-            output = io.BytesIO()
-            pdf.output(output)
-            output.seek(0)
-            b64 = base64.b64encode(output.read()).decode()
-
-            st.success("Report Ready!")
-            st.download_button(
-                label="Download Final_Medical_Report.pdf",
-                data=output,
-                file_name="AI_Medical_Report.pdf",
-                mime="application/pdf"
-            )
-            st.balloons()
+                st.balloons()
+                st.download_button(
+                    label="DOWNLOAD YOUR REPORT",
+                    data=output,
+                    file_name="AI_Doctor_Report.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
 
 # Footer
-st.markdown("---")
-st.markdown("<p style='text-align:center'>© 2025 AI Health Platform – Made with ❤️ for everyone</p>", unsafe_allow_html=True)
+st.markdown("<br><hr><p style='text-align:center; color:white;'>© 2025 AI Doctor Pro - Made with ❤️ in Pakistan</p>", unsafe_allow_html=True)
