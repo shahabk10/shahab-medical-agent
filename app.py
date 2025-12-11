@@ -1,4 +1,4 @@
-```python
+
 # requirements.txt (Create this file separately and upload to your Streamlit app repository)
 # google-generativeai
 # fpdf
@@ -376,4 +376,4 @@ def main():
 # Additional Features: Added a feedback section on home
 if __name__ == "__main__":
     main()
-```
+
