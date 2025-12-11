@@ -1,9 +1,8 @@
 streamlit
-google-generativeai
 gtts
 fpdf2
 pillow
+requests
 streamlit-option-menu
 streamlit-folium
 folium
-requests
